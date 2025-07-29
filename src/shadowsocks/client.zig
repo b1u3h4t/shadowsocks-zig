@@ -51,18 +51,19 @@ pub fn Client(comptime TCrypto: type) type {
                 .port = port,
             });
 
-            var seed: [std.rand.DefaultCsprng.secret_seed_length]u8 = undefined;
-            try std.os.getrandom(&seed);
-            var prng = std.rand.DefaultCsprng.init(seed);
-
             var request_salt: [TCrypto.salt_length]u8 = undefined;
-            prng.fill(&request_salt);
+            std.crypto.random.bytes(&request_salt);
+
+            var padding_bytes: [2]u8 = undefined;
+            std.crypto.random.bytes(&padding_bytes);
+            const padding_length = if (initial_payload.len == 0)
+                (std.mem.readInt(u16, &padding_bytes, .big) % 900) + 1
+            else
+                0;
 
             var request_encryptor = TCrypto.Encryptor{
                 .key = TCrypto.deriveSessionSubkeyWithSalt(key, request_salt),
             };
-
-            const padding_length = if (initial_payload.len == 0) std.rand.Random.intRangeLessThan(prng.random(), u16, 1, 901) else 0;
 
             const variable_header = headers.VariableLengthRequestHeader{
                 .address_type = 3,
@@ -77,8 +78,8 @@ pub fn Client(comptime TCrypto: type) type {
 
             const fixed_header = headers.FixedLengthRequestHeader{
                 .type = 0,
-                .timestamp = @intCast(u64, std.time.timestamp()),
-                .length = @intCast(u16, encoded_variable_header_size),
+                .timestamp = @as(u64, @intCast(std.time.timestamp())),
+                .length = @truncate(encoded_variable_header_size),
             };
 
             var encoded_fixed_header: [headers.FixedLengthRequestHeader.size]u8 = undefined;
@@ -129,7 +130,7 @@ pub fn Client(comptime TCrypto: type) type {
                 return false;
             }
 
-            std.mem.copy(u8, &self.response_salt, self.recv_buffer.items[0..TCrypto.salt_length]);
+            std.mem.copyForwards(u8, &self.response_salt, self.recv_buffer.items[0..TCrypto.salt_length]);
 
             self.response_decryptor = .{
                 .key = TCrypto.deriveSessionSubkeyWithSalt(self.key, self.response_salt),
@@ -137,11 +138,7 @@ pub fn Client(comptime TCrypto: type) type {
 
             const encrypted_response_header = self.recv_buffer.items[TCrypto.salt_length .. TCrypto.salt_length + THeader.size];
             var encrypted_response_header_tag: [TCrypto.tag_length]u8 = undefined;
-            std.mem.copy(
-                u8,
-                &encrypted_response_header_tag,
-                self.recv_buffer.items[TCrypto.salt_length + THeader.size .. TCrypto.salt_length + THeader.size + TCrypto.tag_length],
-            );
+            std.mem.copyForwards(u8, &encrypted_response_header_tag, self.recv_buffer.items[TCrypto.salt_length + THeader.size .. TCrypto.salt_length + THeader.size + TCrypto.tag_length]);
             var encoded_response_header: [THeader.size]u8 = undefined;
             try self.response_decryptor.decrypt(&encoded_response_header, encrypted_response_header, encrypted_response_header_tag);
 
@@ -152,7 +149,7 @@ pub fn Client(comptime TCrypto: type) type {
             }
 
             // TODO: is this check really needed, since we already matched the request salt?
-            if (@intCast(u64, std.time.timestamp()) > decoded.result.timestamp + 30) {
+            if (@as(u64, @intCast(std.time.timestamp())) > decoded.result.timestamp + 30) {
                 return Error.TimestampTooOld;
             }
 
@@ -171,11 +168,11 @@ pub fn Client(comptime TCrypto: type) type {
 
             const encrypted_length = self.recv_buffer.items[0..2];
             var tag: [TCrypto.tag_length]u8 = undefined;
-            std.mem.copy(u8, &tag, self.recv_buffer.items[2 .. 2 + TCrypto.tag_length]);
+            std.mem.copyForwards(u8, &tag, self.recv_buffer.items[2 .. 2 + TCrypto.tag_length]);
             var encoded_length: [2]u8 = undefined;
             try self.response_decryptor.decrypt(&encoded_length, encrypted_length, tag);
 
-            self.next_length = std.mem.readIntBig(u16, encoded_length[0..2]);
+            self.next_length = std.mem.readInt(u16, encoded_length[0..2], .big);
             try self.recv_buffer.replaceRange(0, 2 + TCrypto.tag_length, &.{});
 
             self.state = .wait_payload;
@@ -190,8 +187,8 @@ pub fn Client(comptime TCrypto: type) type {
 
             const encrypted_payload = self.recv_buffer.items[0..self.next_length];
             var encrypted_payload_tag: [TCrypto.tag_length]u8 = undefined;
-            std.mem.copy(u8, &encrypted_payload_tag, self.recv_buffer.items[self.next_length .. self.next_length + TCrypto.tag_length]);
-            var payload = try allocator.alloc(u8, encrypted_payload.len);
+            std.mem.copyForwards(u8, &encrypted_payload_tag, self.recv_buffer.items[self.next_length .. self.next_length + TCrypto.tag_length]);
+            const payload = try allocator.alloc(u8, encrypted_payload.len);
             defer allocator.free(payload);
 
             try self.response_decryptor.decrypt(payload, encrypted_payload, encrypted_payload_tag);
@@ -207,8 +204,8 @@ pub fn Client(comptime TCrypto: type) type {
         fn getPacket(self: *@This(), data: []u8, allocator: std.mem.Allocator) !usize {
             while (true) {
                 if (self.received_payload.items.len > 0) {
-                    const count = std.math.min(self.received_payload.items.len, data.len);
-                    std.mem.copy(u8, data, self.received_payload.items[0..count]);
+                    const count = @min(self.received_payload.items.len, data.len);
+                    std.mem.copyForwards(u8, data, self.received_payload.items[0..count]);
                     try self.received_payload.replaceRange(0, count, &.{});
                     return count;
                 }
@@ -241,7 +238,7 @@ pub fn Client(comptime TCrypto: type) type {
 
             while (true) {
                 var buffer: [1024]u8 = undefined;
-                var received = try self.socket.receive(&buffer);
+                const received = try self.socket.receive(&buffer);
                 logger.debug("s->c {d}", .{received});
                 try self.recv_buffer.appendSlice(buffer[0..received]);
 
@@ -258,7 +255,7 @@ pub fn Client(comptime TCrypto: type) type {
 
             {
                 var encoded_length: [2]u8 = undefined;
-                std.mem.writeIntBig(u16, &encoded_length, @intCast(u16, data.len));
+                std.mem.writeInt(u16, &encoded_length, @truncate(data.len), .big);
 
                 var encrypted_length: [2]u8 = undefined;
                 var tag: [TCrypto.tag_length]u8 = undefined;
@@ -270,7 +267,7 @@ pub fn Client(comptime TCrypto: type) type {
             }
 
             {
-                var encrypted_data: []u8 = try allocator.alloc(u8, data.len);
+                const encrypted_data: []u8 = try allocator.alloc(u8, data.len);
                 defer allocator.free(encrypted_data);
 
                 var tag: [TCrypto.tag_length]u8 = undefined;

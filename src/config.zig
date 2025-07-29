@@ -7,10 +7,8 @@ pub const Config = struct {
 };
 
 pub fn configFromJsonString(input_data: []const u8, allocator: std.mem.Allocator) !Config {
-    var stream = std.json.TokenStream.init(input_data);
-    return try std.json.parse(Config, &stream, .{
-        .allocator = allocator,
-    });
+    const parsed = try std.json.parseFromSlice(Config, allocator, input_data, .{});
+    return parsed.value;
 }
 
 pub fn configFromJsonFile(path: []const u8, allocator: std.mem.Allocator) !Config {
