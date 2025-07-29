@@ -365,7 +365,7 @@ pub fn Server(comptime TCrypto: type) type {
                 .write = false,
             });
 
-            var buffer: [1024]u8 = undefined;
+            var buffer: [1024 * 32]u8 = undefined;
             while (!should_stop.*) {
                 _ = try network.waitForSocketEvent(state.socket_set, std.time.ns_per_ms);
 
