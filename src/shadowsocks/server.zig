@@ -58,6 +58,8 @@ pub fn Server(comptime TCrypto: type) type {
             request_decryptor: TCrypto.Encryptor = undefined,
             session_subkey: [TCrypto.key_length]u8 = undefined,
 
+            remote_socket_closed: bool = false,
+
             fn init(socket: network.Socket, key: [TCrypto.key_length]u8, socket_set: *network.SocketSet, allocator: std.mem.Allocator) !@This() {
                 const response_salt = try TCrypto.generateRandomSalt();
 
@@ -80,8 +82,11 @@ pub fn Server(comptime TCrypto: type) type {
                 };
             }
 
-            fn deinit(self: @This()) void {
-                self.remote_socket.close();
+            fn deinit(self: *@This()) void {
+                if (!self.remote_socket_closed) {
+                    self.remote_socket.close();
+                    self.remote_socket_closed = true;
+                }
                 self.recv_buffer.deinit();
             }
         };
@@ -176,6 +181,7 @@ pub fn Server(comptime TCrypto: type) type {
                     defer endpoint_list.deinit();
 
                     state.remote_socket.close();
+                    state.remote_socket_closed = true;
 
                     var connected: bool = false;
                     for (endpoint_list.endpoints) |endpt| {
@@ -186,6 +192,7 @@ pub fn Server(comptime TCrypto: type) type {
                         };
 
                         state.remote_socket = sock;
+                        state.remote_socket_closed = false;
                         connected = true;
                         break;
                     }
