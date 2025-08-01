@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const network = @import("network");
 const crypto = @import("crypto.zig");
 const headers = @import("headers.zig");
@@ -325,7 +326,7 @@ pub fn Server(comptime TCrypto: type) type {
             var total_sent: usize = 0;
             while (total_sent < send_buffer.items.len) {
                 const sent = try state.socket.send(send_buffer.items[total_sent..]);
-                logger.debug("s->r {d}", .{sent});
+                logger.debug("s->c {d}", .{sent});
 
                 if (sent == 0) {
                     return Error.RemoteDisconnected;
@@ -432,6 +433,8 @@ pub fn Server(comptime TCrypto: type) type {
         fn startInternal(should_stop: *bool, port: u16, key: [TCrypto.key_length]u8, allocator: std.mem.Allocator) !void {
             var socket = try network.Socket.create(.ipv4, .tcp);
             defer socket.close();
+
+            try socket.enablePortReuse(true);
             try socket.bindToPort(port);
             try socket.listen();
 
@@ -455,11 +458,16 @@ pub fn Server(comptime TCrypto: type) type {
                     const client = try socket.accept();
                     logger.info("Accepted new client", .{});
 
-                    try client_threads.append(try std.Thread.spawn(
+                    const thread = try std.Thread.spawn(
                         .{},
                         handleClientCatchAll,
                         .{ should_stop, client, &server_state, onClientError, allocator },
-                    ));
+                    );
+                    if (std.Thread.use_pthreads or builtin.os.tag == .windows or builtin.os.tag == .linux or builtin.os.tag == .wasi) {
+                        thread.detach();
+                    } else {
+                        try client_threads.append(thread);
+                    }
                 }
             }
 
