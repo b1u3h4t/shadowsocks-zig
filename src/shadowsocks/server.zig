@@ -66,7 +66,7 @@ pub fn Server(comptime TCrypto: type) type {
                 var remote_socket = try network.Socket.create(.ipv4, .tcp);
                 errdefer remote_socket.close();
 
-                var recv_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
+                var recv_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024 * 56);
                 errdefer recv_buffer.deinit();
 
                 return .{
@@ -284,7 +284,7 @@ pub fn Server(comptime TCrypto: type) type {
         }
 
         fn forwardToClient(state: *ClientState, received: []const u8, allocator: std.mem.Allocator) !void {
-            var send_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
+            var send_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024 * 56);
             defer send_buffer.deinit();
 
             if (!state.sent_initial_response) {
@@ -373,7 +373,7 @@ pub fn Server(comptime TCrypto: type) type {
                 .write = false,
             });
 
-            var buffer: [1024 * 32]u8 = undefined;
+            var buffer: [1024 * 56]u8 = undefined;
             while (!should_stop.*) {
                 _ = try network.waitForSocketEvent(state.socket_set, std.time.ns_per_ms);
 
