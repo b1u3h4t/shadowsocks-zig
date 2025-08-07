@@ -23,6 +23,7 @@ pub fn Server(comptime TCrypto: type) type {
             DuplicateSalt,
             NoInitialPayloadOrPadding,
             TimestampTooOld,
+            TooLong,
         };
 
         fn readContent(buffer: []const u8, content: []u8, encryptor: *TCrypto.Encryptor) !void {
@@ -150,6 +151,10 @@ pub fn Server(comptime TCrypto: type) type {
         }
 
         fn handleWaitForVariable(state: *ClientState, allocator: std.mem.Allocator) !bool {
+            if (state.length > std.math.maxInt(u16) - TCrypto.tag_length) {
+                return Error.TooLong;
+            }
+
             if (state.recv_buffer.items.len < state.length + TCrypto.tag_length) {
                 return false;
             }
@@ -255,6 +260,10 @@ pub fn Server(comptime TCrypto: type) type {
         }
 
         fn handleWaitForPayload(state: *ClientState, allocator: std.mem.Allocator) !bool {
+            if (state.length > std.math.maxInt(u16) - TCrypto.tag_length) {
+                return Error.TooLong;
+            }
+
             if (state.recv_buffer.items.len < state.length + TCrypto.tag_length) {
                 return false;
             }
