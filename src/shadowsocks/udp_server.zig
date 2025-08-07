@@ -32,15 +32,15 @@ const RequestHeader = struct {
         var stream = std.io.fixedBufferStream(encoded);
         var reader = stream.reader();
 
-        const t = try reader.readIntBig(u8);
-        const timestamp = try reader.readIntBig(u64);
-        const padding_length = try reader.readIntBig(u16);
+        const t = try reader.readInt(u8, .big);
+        const timestamp = try reader.readInt(u64, .big);
+        const padding_length = try reader.readInt(u16, .big);
         try reader.skipBytes(padding_length, .{});
-        const address_type = try reader.readIntBig(u8);
+        const address_type = try reader.readInt(u8, .big);
         const address = try headers.readSocksAddress(address_type, reader, allocator);
         errdefer allocator.free(address);
 
-        const port = try reader.readIntBig(u16);
+        const port = try reader.readInt(u16, .big);
 
         return .{
             .bytes_read = stream.pos,
@@ -60,19 +60,20 @@ const RequestHeader = struct {
         var stream = std.io.fixedBufferStream(encoded);
         var writer = stream.writer();
 
-        try writer.writeIntBig(u8, self.type);
-        try writer.writeIntBig(u64, self.timestamp);
+        try writer.writeInt(u8, self.type, .big);
+        try writer.writeInt(u64, self.timestamp, .big);
 
-        try writer.writeIntBig(u16, self.padding_length);
+        try writer.writeInt(u16, self.padding_length, .big);
         try writer.writeByteNTimes(0, self.padding_length);
 
-        try writer.writeIntBig(u8, self.address_type);
+        try writer.writeInt(u8, self.address_type, .big);
         if (self.address_type == 3) {
-            try writer.writeIntBig(u8, @intCast(u8, self.address.len));
+            const addr_len: u8 = if (self.address.len > std.math.maxInt(u8)) return error.AddressTooLong else @intCast(self.address.len);
+            try writer.writeInt(u8, addr_len, .big);
         }
         _ = try writer.write(self.address);
 
-        try writer.writeIntBig(u16, self.port);
+        try writer.writeInt(u16, self.port, .big);
 
         return stream.pos;
     }
@@ -109,7 +110,7 @@ pub fn UdpServer(comptime TCrypto: type) type {
             const encrypted = buffer[0 .. buffer.len - TCrypto.tag_length];
 
             var tag: [TCrypto.tag_length]u8 = undefined;
-            std.mem.copy(u8, &tag, buffer[buffer.len - TCrypto.tag_length .. buffer.len]);
+            std.mem.copyForwards(u8, &tag, buffer[buffer.len - TCrypto.tag_length .. buffer.len]);
 
             try TCrypto.algorithm.decrypt(content, encrypted, tag, "", nonce, key);
         }
@@ -199,8 +200,8 @@ pub fn UdpServer(comptime TCrypto: type) type {
         };
 
         pub fn start(port: u16, key: [TCrypto.key_length]u8, allocator: std.mem.Allocator) !Running {
-            var should_stop = try allocator.create(bool);
-            var thread = try std.Thread.spawn(.{}, startInternal, .{ should_stop, port, key, allocator });
+            const should_stop = try allocator.create(bool);
+            const thread = try std.Thread.spawn(.{}, startInternal, .{ should_stop, port, key, allocator });
 
             return .{
                 .thread = thread,
@@ -257,8 +258,8 @@ const UdpEchoServer = struct {
     };
 
     pub fn start(port: u16, allocator: std.mem.Allocator) !Running {
-        var should_stop = try allocator.create(bool);
-        var thread = try std.Thread.spawn(.{}, startInternal, .{ should_stop, port, allocator });
+        const should_stop = try allocator.create(bool);
+        const thread = try std.Thread.spawn(.{}, startInternal, .{ should_stop, port, allocator });
 
         return .{
             .thread = thread,
@@ -303,7 +304,7 @@ test "udp request header encode decode" {
 
     const request_header: RequestHeader = .{
         .type = 0,
-        .timestamp = @intCast(u64, std.time.timestamp()),
+        .timestamp = @as(u64, @intCast(std.time.timestamp())),
         .padding_length = 10,
         .address_type = 1,
         .address = &address,
@@ -367,7 +368,7 @@ test "test udp server" {
 
     const request_header: RequestHeader = .{
         .type = 0,
-        .timestamp = @intCast(u64, std.time.timestamp()),
+        .timestamp = @as(u64, @intCast(std.time.timestamp())),
         .padding_length = 10,
         .address_type = 1,
         .address = &address,

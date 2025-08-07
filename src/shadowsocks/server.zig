@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const network = @import("network");
 const crypto = @import("crypto.zig");
 const headers = @import("headers.zig");
@@ -22,12 +23,13 @@ pub fn Server(comptime TCrypto: type) type {
             DuplicateSalt,
             NoInitialPayloadOrPadding,
             TimestampTooOld,
+            TooLong,
         };
 
         fn readContent(buffer: []const u8, content: []u8, encryptor: *TCrypto.Encryptor) !void {
             const encrypted = buffer[0 .. buffer.len - TCrypto.tag_length];
             var tag: [TCrypto.tag_length]u8 = undefined;
-            std.mem.copy(u8, &tag, buffer[buffer.len - TCrypto.tag_length .. buffer.len]);
+            std.mem.copyForwards(u8, &tag, buffer[buffer.len - TCrypto.tag_length .. buffer.len]);
             try encryptor.decrypt(content, encrypted, tag);
         }
 
@@ -57,13 +59,15 @@ pub fn Server(comptime TCrypto: type) type {
             request_decryptor: TCrypto.Encryptor = undefined,
             session_subkey: [TCrypto.key_length]u8 = undefined,
 
+            remote_socket_closed: bool = false,
+
             fn init(socket: network.Socket, key: [TCrypto.key_length]u8, socket_set: *network.SocketSet, allocator: std.mem.Allocator) !@This() {
-                var response_salt = try TCrypto.generateRandomSalt();
+                const response_salt = try TCrypto.generateRandomSalt();
 
                 var remote_socket = try network.Socket.create(.ipv4, .tcp);
                 errdefer remote_socket.close();
 
-                var recv_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
+                var recv_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024 * 56);
                 errdefer recv_buffer.deinit();
 
                 return .{
@@ -79,8 +83,11 @@ pub fn Server(comptime TCrypto: type) type {
                 };
             }
 
-            fn deinit(self: @This()) void {
-                self.remote_socket.close();
+            fn deinit(self: *@This()) void {
+                if (!self.remote_socket_closed) {
+                    self.remote_socket.close();
+                    self.remote_socket_closed = true;
+                }
                 self.recv_buffer.deinit();
             }
         };
@@ -107,10 +114,10 @@ pub fn Server(comptime TCrypto: type) type {
                 return Error.InitialRequestTooSmall;
             }
 
-            std.mem.copy(u8, &state.request_salt, state.recv_buffer.items[0..TCrypto.salt_length]);
+            std.mem.copyForwards(u8, &state.request_salt, state.recv_buffer.items[0..TCrypto.salt_length]);
 
             // Detect replay attacks with duplicate salts
-            const time: u64 = @intCast(u64, std.time.milliTimestamp());
+            const time: u64 = @as(u64, @intCast(std.time.milliTimestamp()));
             server_state.request_salt_cache.removeAfterTime(time + 60 * std.time.ms_per_s);
 
             if (!try server_state.request_salt_cache.maybeAdd(&state.request_salt, time)) {
@@ -131,7 +138,7 @@ pub fn Server(comptime TCrypto: type) type {
             const decoded = try headers.FixedLengthRequestHeader.decode(&decrypted);
 
             // Detect replay attacks by checking for old timestamps
-            if (@intCast(u64, std.time.timestamp()) > decoded.result.timestamp + 30) {
+            if (@as(u64, @intCast(std.time.timestamp())) > decoded.result.timestamp + 30) {
                 return Error.TimestampTooOld;
             }
 
@@ -144,11 +151,15 @@ pub fn Server(comptime TCrypto: type) type {
         }
 
         fn handleWaitForVariable(state: *ClientState, allocator: std.mem.Allocator) !bool {
+            if (state.length > std.math.maxInt(u16) - TCrypto.tag_length) {
+                return Error.TooLong;
+            }
+
             if (state.recv_buffer.items.len < state.length + TCrypto.tag_length) {
                 return false;
             }
 
-            var decrypted: []u8 = try allocator.alloc(u8, state.length);
+            const decrypted: []u8 = try allocator.alloc(u8, state.length);
             defer allocator.free(decrypted);
 
             try readContent(state.recv_buffer.items[0 .. state.length + TCrypto.tag_length], decrypted, &state.request_decryptor);
@@ -175,6 +186,7 @@ pub fn Server(comptime TCrypto: type) type {
                     defer endpoint_list.deinit();
 
                     state.remote_socket.close();
+                    state.remote_socket_closed = true;
 
                     var connected: bool = false;
                     for (endpoint_list.endpoints) |endpt| {
@@ -185,6 +197,7 @@ pub fn Server(comptime TCrypto: type) type {
                         };
 
                         state.remote_socket = sock;
+                        state.remote_socket_closed = false;
                         connected = true;
                         break;
                     }
@@ -238,7 +251,7 @@ pub fn Server(comptime TCrypto: type) type {
             var decrypted: [2]u8 = undefined;
             try readContent(state.recv_buffer.items[0 .. 2 + TCrypto.tag_length], &decrypted, &state.request_decryptor);
 
-            state.length = std.mem.readIntBig(u16, &decrypted);
+            state.length = std.mem.readInt(u16, &decrypted, .big);
             state.status = .wait_for_payload;
 
             try state.recv_buffer.replaceRange(0, 2 + TCrypto.tag_length, &.{});
@@ -247,6 +260,10 @@ pub fn Server(comptime TCrypto: type) type {
         }
 
         fn handleWaitForPayload(state: *ClientState, allocator: std.mem.Allocator) !bool {
+            if (state.length > std.math.maxInt(u16) - TCrypto.tag_length) {
+                return Error.TooLong;
+            }
+
             if (state.recv_buffer.items.len < state.length + TCrypto.tag_length) {
                 return false;
             }
@@ -276,7 +293,7 @@ pub fn Server(comptime TCrypto: type) type {
         }
 
         fn forwardToClient(state: *ClientState, received: []const u8, allocator: std.mem.Allocator) !void {
-            var send_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
+            var send_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024 * 56);
             defer send_buffer.deinit();
 
             if (!state.sent_initial_response) {
@@ -284,11 +301,12 @@ pub fn Server(comptime TCrypto: type) type {
 
                 const THeader = headers.FixedLengthResponseHeader(TCrypto.salt_length);
 
+                const len16: u16 = if (received.len > std.math.maxInt(u16)) return error.TooLong else @intCast(received.len);
                 const header: THeader = .{
                     .type = 1,
-                    .timestamp = @intCast(u64, std.time.timestamp()),
+                    .timestamp = @as(u64, @intCast(std.time.timestamp())),
                     .salt = state.request_salt,
-                    .length = @intCast(u16, received.len),
+                    .length = len16,
                 };
 
                 var encoded: [THeader.size]u8 = undefined;
@@ -304,7 +322,8 @@ pub fn Server(comptime TCrypto: type) type {
                 state.sent_initial_response = true;
             } else {
                 var encoded: [2]u8 = undefined;
-                std.mem.writeIntBig(u16, &encoded, @intCast(u16, received.len));
+                const len16: u16 = if (received.len > std.math.maxInt(u16)) return error.TooLong else @intCast(received.len);
+                std.mem.writeInt(u16, &encoded, len16, .big);
 
                 var encrypted_and_tag: [2 + TCrypto.tag_length]u8 = undefined;
                 state.response_encryptor.encrypt(&encoded, encrypted_and_tag[0..2], encrypted_and_tag[2 .. 2 + TCrypto.tag_length]);
@@ -312,7 +331,7 @@ pub fn Server(comptime TCrypto: type) type {
                 try send_buffer.appendSlice(&encrypted_and_tag);
             }
 
-            var encrypted: []u8 = try allocator.alloc(u8, received.len);
+            const encrypted: []u8 = try allocator.alloc(u8, received.len);
             defer allocator.free(encrypted);
 
             var tag: [TCrypto.tag_length]u8 = undefined;
@@ -323,7 +342,7 @@ pub fn Server(comptime TCrypto: type) type {
             var total_sent: usize = 0;
             while (total_sent < send_buffer.items.len) {
                 const sent = try state.socket.send(send_buffer.items[total_sent..]);
-                logger.debug("s->r {d}", .{sent});
+                logger.debug("s->c {d}", .{sent});
 
                 if (sent == 0) {
                     return Error.RemoteDisconnected;
@@ -344,7 +363,7 @@ pub fn Server(comptime TCrypto: type) type {
                 .l_linger = 0,
             };
 
-            std.os.setsockopt(socket.internal, std.os.SOL.SOCKET, std.os.SO.LINGER, std.mem.asBytes(&value)) catch |err| {
+            std.posix.setsockopt(socket.internal, std.posix.SOL.SOCKET, std.posix.SO.LINGER, std.mem.asBytes(&value)) catch |err| {
                 logger.err("Failed to set SO_LINGER: {s}", .{@errorName(err)});
             };
 
@@ -363,7 +382,7 @@ pub fn Server(comptime TCrypto: type) type {
                 .write = false,
             });
 
-            var buffer: [1024]u8 = undefined;
+            var buffer: [1024 * 56]u8 = undefined;
             while (!should_stop.*) {
                 _ = try network.waitForSocketEvent(state.socket_set, std.time.ns_per_ms);
 
@@ -430,6 +449,8 @@ pub fn Server(comptime TCrypto: type) type {
         fn startInternal(should_stop: *bool, port: u16, key: [TCrypto.key_length]u8, allocator: std.mem.Allocator) !void {
             var socket = try network.Socket.create(.ipv4, .tcp);
             defer socket.close();
+
+            try socket.enablePortReuse(true);
             try socket.bindToPort(port);
             try socket.listen();
 
@@ -450,14 +471,19 @@ pub fn Server(comptime TCrypto: type) type {
                 _ = try network.waitForSocketEvent(&socket_set, std.time.ns_per_ms);
 
                 if (socket_set.isReadyRead(socket)) {
-                    var client = try socket.accept();
+                    const client = try socket.accept();
                     logger.info("Accepted new client", .{});
 
-                    try client_threads.append(try std.Thread.spawn(
+                    const thread = try std.Thread.spawn(
                         .{},
                         handleClientCatchAll,
                         .{ should_stop, client, &server_state, onClientError, allocator },
-                    ));
+                    );
+                    if (std.Thread.use_pthreads or builtin.os.tag == .windows or builtin.os.tag == .linux or builtin.os.tag == .wasi) {
+                        thread.detach();
+                    } else {
+                        try client_threads.append(thread);
+                    }
                 }
             }
 
@@ -467,8 +493,8 @@ pub fn Server(comptime TCrypto: type) type {
         }
 
         pub fn start(port: u16, key: [TCrypto.key_length]u8, allocator: std.mem.Allocator) !@This() {
-            var should_stop = try allocator.create(bool);
-            var thread = try std.Thread.spawn(.{}, startInternal, .{ should_stop, port, key, allocator });
+            const should_stop = try allocator.create(bool);
+            const thread = try std.Thread.spawn(.{}, startInternal, .{ should_stop, port, key, allocator });
 
             return .{
                 .thread = thread,

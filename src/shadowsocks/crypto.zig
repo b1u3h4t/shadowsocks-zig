@@ -29,8 +29,8 @@ fn Crypto(comptime method_name: []const u8, comptime TAlg: type) type {
 
         pub fn deriveSessionSubkeyWithSalt(key: [key_length]u8, salt: [salt_length]u8) [key_length]u8 {
             var key_and_salt: [key.len + salt.len]u8 = undefined;
-            std.mem.copy(u8, key_and_salt[0..key.len], &key);
-            std.mem.copy(u8, key_and_salt[key.len .. key.len + salt.len], &salt);
+            std.mem.copyForwards(u8, key_and_salt[0..key.len], key[0..]);
+            std.mem.copyForwards(u8, key_and_salt[key.len .. key.len + salt.len], salt[0..]);
 
             var session_subkey: [key_length]u8 = undefined;
             deriveSessionSubkey(&key_and_salt, &session_subkey);
@@ -40,8 +40,8 @@ fn Crypto(comptime method_name: []const u8, comptime TAlg: type) type {
 
         pub fn deriveSessionSubkeyWithSaltUdp(key: [key_length]u8, salt: [8]u8) [key_length]u8 {
             var key_and_salt: [key.len + salt.len]u8 = undefined;
-            std.mem.copy(u8, key_and_salt[0..key.len], &key);
-            std.mem.copy(u8, key_and_salt[key.len .. key.len + salt.len], &salt);
+            std.mem.copyForwards(u8, key_and_salt[0..key.len], &key);
+            std.mem.copyForwards(u8, key_and_salt[key.len .. key.len + salt.len], &salt);
 
             var session_subkey: [key_length]u8 = undefined;
             deriveSessionSubkey(&key_and_salt, &session_subkey);
@@ -50,13 +50,8 @@ fn Crypto(comptime method_name: []const u8, comptime TAlg: type) type {
         }
 
         pub fn generateRandomSalt() ![salt_length]u8 {
-            var seed: [std.rand.DefaultCsprng.secret_seed_length]u8 = undefined;
-            try std.os.getrandom(&seed);
-
             var salt: [salt_length]u8 = undefined;
-            var prng = std.rand.DefaultCsprng.init(seed);
-            prng.fill(&salt);
-
+            std.crypto.random.bytes(&salt);
             return salt;
         }
 
@@ -66,7 +61,7 @@ fn Crypto(comptime method_name: []const u8, comptime TAlg: type) type {
 
             pub fn encrypt(self: *@This(), message: []const u8, encrypted: []u8, tag: *[tag_length]u8) void {
                 var nonce: [nonce_length]u8 = undefined;
-                std.mem.writeIntLittle(u96, &nonce, self.nonce);
+                std.mem.writeInt(u96, &nonce, self.nonce, .little);
 
                 TAlg.encrypt(encrypted, tag, message, "", nonce, self.key);
 
@@ -75,7 +70,7 @@ fn Crypto(comptime method_name: []const u8, comptime TAlg: type) type {
 
             pub fn decrypt(self: *@This(), message: []u8, encrypted: []const u8, tag: [tag_length]u8) !void {
                 var nonce: [nonce_length]u8 = undefined;
-                std.mem.writeIntLittle(u96, &nonce, self.nonce);
+                std.mem.writeInt(u96, &nonce, self.nonce, .little);
 
                 try TAlg.decrypt(message, encrypted, tag, "", nonce, self.key);
 
@@ -209,7 +204,7 @@ test "Test decrypt real data" {
     const tag = data[32 + 11 .. 32 + 11 + 16];
 
     var nonce: [96 / 8]u8 = undefined;
-    std.mem.writeIntBig(u96, &nonce, 0);
+    std.mem.writeInt(u96, &nonce, 0, .big);
 
     var message: [11]u8 = undefined;
     try Aes256Gcm.decrypt(&message, fixed, tag.*, "", nonce, session_subkey);

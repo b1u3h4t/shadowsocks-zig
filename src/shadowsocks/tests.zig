@@ -177,7 +177,7 @@ test "client send non-initial payload - Blake3Aes256Gcm" {
     defer client.deinit();
 
     const payload = "GET / HTTP/1.1\r\nHost: eu.httpbin.org\r\n\r\n";
-    var sent = try client.send(payload, std.testing.allocator);
+    const sent = try client.send(payload, std.testing.allocator);
     try std.testing.expectEqual(payload.len, sent);
 
     var recv_buffer: [1024]u8 = undefined;
@@ -197,14 +197,13 @@ test "client send non-initial payload - Blake3Aes256Gcm" {
 test "MITM replay fails - Blake3Aes256Gcm" {
     const mitm_port = 10_007;
     const proxy_port = 10_008;
-
     // Start MITM proxy
     var mitm_data = MitmData.init(std.heap.page_allocator);
     defer mitm_data.deinit();
     _ = try std.Thread.spawn(.{}, startMitmProxy, .{
         mitm_port,
-        .{
-            .address = .{ .ipv4 = .{ .value = .{ 127, 0, 0, 1 } } },
+        network.EndPoint{
+            .address = try network.Address.parse("127.0.0.1"),
             .port = proxy_port,
         },
         &mitm_data,
@@ -223,7 +222,7 @@ test "MITM replay fails - Blake3Aes256Gcm" {
     defer client.deinit();
 
     const payload = "GET / HTTP/1.1\r\nHost: eu.httpbin.org\r\n\r\n";
-    var sent = try client.send(payload, std.testing.allocator);
+    const sent = try client.send(payload, std.testing.allocator);
     try std.testing.expectEqual(payload.len, sent);
 
     var recv_buffer: [1024]u8 = undefined;

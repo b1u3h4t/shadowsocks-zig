@@ -3,20 +3,20 @@ const std = @import("std");
 pub fn readSocksAddress(address_type: u8, reader: anytype, allocator: std.mem.Allocator) ![]u8 {
     return switch (address_type) {
         1 => {
-            var addr: []u8 = try allocator.alloc(u8, 4);
+            const addr: []u8 = try allocator.alloc(u8, 4);
             errdefer allocator.free(addr);
             try reader.readNoEof(addr);
             return addr;
         },
         3 => {
-            const address_length = try reader.readIntBig(u8);
-            var addr: []u8 = try allocator.alloc(u8, address_length);
+            const address_length = try reader.readInt(u8, .big);
+            const addr: []u8 = try allocator.alloc(u8, address_length);
             errdefer allocator.free(addr);
             try reader.readNoEof(addr);
             return addr;
         },
         4 => {
-            var addr: []u8 = try allocator.alloc(u8, 16);
+            const addr: []u8 = try allocator.alloc(u8, 16);
             errdefer allocator.free(addr);
             try reader.readNoEof(addr);
             return addr;
@@ -55,9 +55,9 @@ pub const FixedLengthRequestHeader = struct {
 
         return .{
             .result = .{
-                .type = try reader.readIntBig(u8),
-                .timestamp = try reader.readIntBig(u64),
-                .length = try reader.readIntBig(u16),
+                .type = try reader.readInt(u8, .big),
+                .timestamp = try reader.readInt(u64, .big),
+                .length = try reader.readInt(u16, .big),
             },
             .bytes_read = stream.pos,
         };
@@ -67,9 +67,9 @@ pub const FixedLengthRequestHeader = struct {
         var stream = std.io.fixedBufferStream(encoded);
         var writer = stream.writer();
 
-        try writer.writeIntBig(u8, self.type);
-        try writer.writeIntBig(u64, self.timestamp);
-        try writer.writeIntBig(u16, self.length);
+        try writer.writeInt(u8, self.type, .big);
+        try writer.writeInt(u64, self.timestamp, .big);
+        try writer.writeInt(u16, self.length, .big);
 
         return stream.pos;
     }
@@ -97,13 +97,12 @@ pub const VariableLengthRequestHeader = struct {
 
         const start_pos = reader.context.pos;
 
-        const address_type = try reader.readIntBig(u8);
-        var address = try readSocksAddress(address_type, reader, allocator);
-        errdefer allocator.free(address);
+        const address_type = try reader.readInt(u8, .big);
+        const address: []u8 = try readSocksAddress(address_type, reader, allocator);
 
-        const port = try reader.readIntBig(u16);
+        const port = try reader.readInt(u16, .big);
 
-        const padding_length = try reader.readIntBig(u16);
+        const padding_length = try reader.readInt(u16, .big);
         try reader.skipBytes(padding_length, .{});
 
         const remaining_length = length - (reader.context.pos - start_pos);
@@ -128,15 +127,16 @@ pub const VariableLengthRequestHeader = struct {
         var stream = std.io.fixedBufferStream(encoded);
         var writer = stream.writer();
 
-        try writer.writeIntBig(u8, self.address_type);
+        try writer.writeInt(u8, self.address_type, .big);
 
         if (self.address_type == 3) {
-            try writer.writeIntBig(u8, @intCast(u8, self.address.len));
+            const addr_len: u8 = if (self.address.len > std.math.maxInt(u8)) return error.AddressTooLong else @intCast(self.address.len);
+            try writer.writeInt(u8, addr_len, .big);
         }
 
         _ = try writer.write(self.address);
-        try writer.writeIntBig(u16, self.port);
-        try writer.writeIntBig(u16, self.padding_length);
+        try writer.writeInt(u16, self.port, .big);
+        try writer.writeInt(u16, self.padding_length, .big);
         try writer.writeByteNTimes(0, self.padding_length);
         _ = try writer.write(self.initial_payload);
 
@@ -157,11 +157,11 @@ pub fn FixedLengthResponseHeader(comptime salt_length: usize) type {
             var stream = std.io.fixedBufferStream(encoded);
             var reader = stream.reader();
 
-            const t = try reader.readIntBig(u8);
-            const timestamp = try reader.readIntBig(u64);
+            const t = try reader.readInt(u8, .big);
+            const timestamp = try reader.readInt(u64, .big);
             var salt: [salt_length]u8 = undefined;
             try reader.readNoEof(&salt);
-            const length = try reader.readIntBig(u16);
+            const length = try reader.readInt(u16, .big);
 
             return .{
                 .result = .{
@@ -178,10 +178,10 @@ pub fn FixedLengthResponseHeader(comptime salt_length: usize) type {
             var stream = std.io.fixedBufferStream(encoded);
             var writer = stream.writer();
 
-            try writer.writeIntBig(u8, self.type);
-            try writer.writeIntBig(u64, self.timestamp);
+            try writer.writeInt(u8, self.type, .big);
+            try writer.writeInt(u64, self.timestamp, .big);
             _ = try writer.write(&self.salt);
-            try writer.writeIntBig(u16, self.length);
+            try writer.writeInt(u16, self.length, .big);
 
             return stream.pos;
         }
