@@ -1,13 +1,38 @@
 const std = @import("std");
 
-fn DecodeResult(comptime T: type) type {
+pub fn readSocksAddress(address_type: u8, reader: anytype, allocator: std.mem.Allocator) ![]u8 {
+    return switch (address_type) {
+        1 => {
+            const addr: []u8 = try allocator.alloc(u8, 4);
+            errdefer allocator.free(addr);
+            try reader.readNoEof(addr);
+            return addr;
+        },
+        3 => {
+            const address_length = try reader.readInt(u8, .big);
+            const addr: []u8 = try allocator.alloc(u8, address_length);
+            errdefer allocator.free(addr);
+            try reader.readNoEof(addr);
+            return addr;
+        },
+        4 => {
+            const addr: []u8 = try allocator.alloc(u8, 16);
+            errdefer allocator.free(addr);
+            try reader.readNoEof(addr);
+            return addr;
+        },
+        else => unreachable,
+    };
+}
+
+pub fn DecodeResult(comptime T: type) type {
     return struct {
         bytes_read: usize,
         result: T,
     };
 }
 
-fn DecodeResultWithDeinit(comptime T: type) type {
+pub fn DecodeResultWithDeinit(comptime T: type) type {
     return struct {
         bytes_read: usize,
         result: T,
@@ -73,30 +98,7 @@ pub const VariableLengthRequestHeader = struct {
         const start_pos = reader.context.pos;
 
         const address_type = try reader.readInt(u8, .big);
-        const address: []u8 = add: {
-            switch (address_type) {
-                1 => {
-                    const addr: []u8 = try allocator.alloc(u8, 4);
-                    errdefer allocator.free(addr);
-                    try reader.readNoEof(addr);
-                    break :add addr;
-                },
-                3 => {
-                    const address_length = try reader.readInt(u8, .big);
-                    const addr: []u8 = try allocator.alloc(u8, address_length);
-                    errdefer allocator.free(addr);
-                    try reader.readNoEof(addr);
-                    break :add addr;
-                },
-                4 => {
-                    const addr: []u8 = try allocator.alloc(u8, 16);
-                    errdefer allocator.free(addr);
-                    try reader.readNoEof(addr);
-                    break :add addr;
-                },
-                else => unreachable,
-            }
-        };
+        const address: []u8 = try readSocksAddress(address_type, reader, allocator);
 
         const port = try reader.readInt(u16, .big);
 
