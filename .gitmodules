@@ -1,4 +1,4 @@
 [submodule "libs/zig-network"]
 	path = libs/zig-network
 	# url = https://github.com/RobinKa/zig-network
-	url = https://github.com/ikskuh/zig-network
+	url = https://github.com/b1u3h4t/zig-network
