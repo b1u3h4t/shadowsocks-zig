@@ -143,7 +143,7 @@ test "Test decrypt real data" {
 
     const salt = data[0..32];
 
-    var input = std.ArrayList(u8).init(std.testing.allocator);
+    var input = std.array_list.Managed(u8).init(std.testing.allocator);
     defer input.deinit();
     try input.appendSlice(&key);
     try input.appendSlice(salt);

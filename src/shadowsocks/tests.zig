@@ -7,13 +7,13 @@ const crypto = @import("crypto.zig");
 const logger = std.log.scoped(.@"shadowsocks.tests");
 
 const MitmData = struct {
-    sent: std.ArrayList(u8),
-    received: std.ArrayList(u8),
+    sent: std.array_list.Managed(u8),
+    received: std.array_list.Managed(u8),
 
     fn init(allocator: std.mem.Allocator) @This() {
         return .{
-            .sent = std.ArrayList(u8).init(allocator),
-            .received = std.ArrayList(u8).init(allocator),
+            .sent = std.array_list.Managed(u8).init(allocator),
+            .received = std.array_list.Managed(u8).init(allocator),
         };
     }
 
@@ -107,7 +107,7 @@ fn waitCanConnect(port: u16) !void {
             }
             const sleep_time_ms = std.math.shl(u64, 200, retries - 1);
             logger.info("Failed to connect on attempt {d}, retrying in {d}ms", .{ retries, sleep_time_ms });
-            std.time.sleep(std.time.ns_per_ms * sleep_time_ms);
+            std.Thread.sleep(std.time.ns_per_ms * sleep_time_ms);
             continue;
         };
 

@@ -22,13 +22,13 @@ pub fn Client(comptime TCrypto: type) type {
         request_salt: [TCrypto.salt_length]u8 = undefined,
         response_salt: [TCrypto.salt_length]u8 = undefined,
         initial_response_received: bool = false,
-        recv_buffer: std.ArrayList(u8),
+        recv_buffer: std.array_list.Managed(u8),
         request_encryptor: TCrypto.Encryptor = undefined,
         response_decryptor: TCrypto.Encryptor = undefined,
         key: [TCrypto.key_length]u8,
         next_length: u16 = undefined,
         state: State = .wait_header,
-        received_payload: std.ArrayList(u8),
+        received_payload: std.array_list.Managed(u8),
 
         pub fn deinit(self: @This()) void {
             self.received_payload.deinit();
@@ -97,7 +97,7 @@ pub fn Client(comptime TCrypto: type) type {
                 &encrypted_variable_header_tag,
             );
 
-            var send_buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
+            var send_buffer = try std.array_list.Managed(u8).initCapacity(allocator, 1024);
             defer send_buffer.deinit();
 
             try send_buffer.appendSlice(&request_salt);
@@ -118,8 +118,8 @@ pub fn Client(comptime TCrypto: type) type {
                 .key = key,
                 .request_salt = request_salt,
                 .request_encryptor = request_encryptor,
-                .received_payload = std.ArrayList(u8).init(allocator),
-                .recv_buffer = std.ArrayList(u8).init(allocator),
+                .received_payload = std.array_list.Managed(u8).init(allocator),
+                .recv_buffer = std.array_list.Managed(u8).init(allocator),
             };
         }
 
@@ -250,7 +250,7 @@ pub fn Client(comptime TCrypto: type) type {
         }
 
         pub fn send(self: *@This(), data: []const u8, allocator: std.mem.Allocator) !usize {
-            var send_buffer = try std.ArrayList(u8).initCapacity(allocator, 2 + TCrypto.tag_length + data.len + TCrypto.tag_length);
+            var send_buffer = try std.array_list.Managed(u8).initCapacity(allocator, 2 + TCrypto.tag_length + data.len + TCrypto.tag_length);
             defer send_buffer.deinit();
 
             {
